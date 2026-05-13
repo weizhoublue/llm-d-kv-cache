@@ -15,7 +15,7 @@
 from collections.abc import Iterable
 
 from vllm.logger import init_logger
-from vllm.v1.core.kv_cache_utils import BlockHash
+from vllm.v1.kv_offload.abstract import OffloadKey, ReqContext
 
 from llmd_fs_backend.file_mapper import FileMapper
 from llmd_fs_backend.manager import SharedStorageOffloadingManager
@@ -48,24 +48,19 @@ class NixlStorageOffloadingManager(SharedStorageOffloadingManager):
         if self.lookup_mode == LOOKUP_MODE_NIXL_QUERY:
             self._nixl_lookup = NixlLookup(cfg)
 
-    def lookup(self, block_hashes: Iterable[BlockHash]) -> int:
-        hit_count = 0
-        for block_hash in block_hashes:
-            key = self.file_mapper.get_file_name(block_hash)
-            if self.lookup_mode == LOOKUP_MODE_NIXL_QUERY:
-                if not self._nixl_lookup.exists(key):
-                    break
-            else:  # dict
-                if key not in self._stored_keys:
-                    break
-            hit_count += 1
-        logger.debug("lookup(%s): %d", self.lookup_mode, hit_count)
-        return hit_count
+    def lookup(self, key: OffloadKey, req_context: ReqContext) -> bool | None:
+        file_path = self.file_mapper.get_file_name(key)
+        if self.lookup_mode == LOOKUP_MODE_NIXL_QUERY:
+            exists = self._nixl_lookup.exists(file_path)
+        else:  # dict
+            exists = file_path in self._stored_keys
+        logger.debug("lookup(%s): %s", self.lookup_mode, exists)
+        return exists
 
     def complete_store(
-        self, block_hashes: Iterable[BlockHash], success: bool = True
+        self, keys: Iterable[OffloadKey], success: bool = True
     ) -> None:
         if not success or self.lookup_mode != LOOKUP_MODE_DICT:
             return
-        for block_hash in block_hashes:
-            self._stored_keys.add(self.file_mapper.get_file_name(block_hash))
+        for key in keys:
+            self._stored_keys.add(self.file_mapper.get_file_name(key))
